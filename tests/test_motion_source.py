@@ -76,6 +76,31 @@ def test_resolve_motion_source_downloads_latest_registry_artifact(tmp_path):
     assert requested_names == ["team/project/walk:latest"]
 
 
+def test_resolve_motion_source_preserves_explicit_registry_alias(tmp_path):
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    motion = downloaded / "motion.npz"
+    motion.touch()
+    requested_names = []
+
+    class FakeArtifact:
+        def download(self):
+            return str(downloaded)
+
+    class FakeApi:
+        def artifact(self, name):
+            requested_names.append(name)
+            return FakeArtifact()
+
+    fake_wandb = SimpleNamespace(Api=FakeApi)
+
+    with patch.dict(sys.modules, {"wandb": fake_wandb}):
+        result = resolve_motion_source(None, "team/project/walk:v2")
+
+    assert result == motion.resolve()
+    assert requested_names == ["team/project/walk:v2"]
+
+
 def test_resolve_motion_source_requires_motion_npz_in_registry_artifact(tmp_path):
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()

@@ -15,7 +15,8 @@ def resolve_motion_source(motion_file: str | None, registry_name: str | None) ->
 
     import wandb
 
-    artifact = wandb.Api().artifact(f"{registry_name}:latest")
+    artifact_name = registry_name if ":" in registry_name else f"{registry_name}:latest"
+    artifact = wandb.Api().artifact(artifact_name)
     motion_path = (Path(artifact.download()) / "motion.npz").resolve()
     if not motion_path.is_file():
         raise FileNotFoundError(errno.ENOENT, "artifact does not contain motion.npz", str(motion_path))
