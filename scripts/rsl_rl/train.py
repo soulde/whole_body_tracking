@@ -24,6 +24,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", type=str, default=None, help="Name of the task.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
     parser.add_argument("--max_iterations", type=int, default=None, help="RL policy training iterations.")
+    parser.add_argument("--log_dir", type=str, default=None, help="Exact directory for local training outputs.")
     motion_source = parser.add_mutually_exclusive_group(required=True)
     motion_source.add_argument("--motion_file", type=str, help="Path to a local motion NPZ file.")
     motion_source.add_argument("--registry_name", type=str, help="Name of a WandB motion registry artifact.")
@@ -31,10 +32,24 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_log_dir(args_cli, agent_cfg) -> str:
+    """Return an explicit output directory or the legacy timestamped layout."""
+    if args_cli.log_dir is not None:
+        return args_cli.log_dir
+
+    import os
+    from datetime import datetime
+
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if agent_cfg.run_name:
+        log_dir += f"_{agent_cfg.run_name}"
+    return os.path.join(log_root_path, log_dir)
+
+
 def _run_training(args_cli, simulation_app):
     """Import the Isaac runtime and execute training after the app is launched."""
     import os
-    from datetime import datetime
 
     import gymnasium as gym
     import torch
@@ -80,11 +95,8 @@ def _run_training(args_cli, simulation_app):
         env_cfg.commands.motion.motion_file = str(motion_path)
 
         log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
-        print(f"[INFO] Logging experiment in directory: {log_root_path}")
-        log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        if agent_cfg.run_name:
-            log_dir += f"_{agent_cfg.run_name}"
-        log_dir = os.path.join(log_root_path, log_dir)
+        log_dir = _resolve_log_dir(args_cli, agent_cfg)
+        print(f"[INFO] Logging experiment in directory: {log_dir}")
 
         env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
         if args_cli.video:

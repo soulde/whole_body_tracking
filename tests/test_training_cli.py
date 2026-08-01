@@ -2,6 +2,7 @@ import builtins
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -64,6 +65,18 @@ def test_training_parser_accepts_either_motion_source(arguments, motion_file, re
     assert args.motion_file == motion_file
     assert args.registry_name == registry_name
     assert args.logger == "tensorboard"
+
+
+def test_training_parser_accepts_explicit_log_directory():
+    module = _import_script_without_runtime("train")
+    parser = module.create_parser()
+
+    args = parser.parse_args(["--motion_file", "motion.npz", "--log_dir", "artifacts/runs/run-1/tensorboard"])
+
+    assert args.log_dir == "artifacts/runs/run-1/tensorboard"
+    assert module._resolve_log_dir(args, SimpleNamespace(experiment_name="tracking", run_name="ignored")) == (
+        "artifacts/runs/run-1/tensorboard"
+    )
 
 
 def test_play_parser_import_does_not_load_simulator_or_wandb():
