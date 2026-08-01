@@ -79,6 +79,36 @@ def test_training_parser_accepts_explicit_log_directory():
     )
 
 
+def test_training_application_closes_after_success():
+    module = _import_script_without_runtime("train")
+    events = []
+    app = SimpleNamespace(close=lambda: events.append("close"))
+
+    with patch.object(module, "_run_training", side_effect=lambda args, application: events.append("train")):
+        module._run_application(SimpleNamespace(), app)
+
+    assert events == ["train", "close"]
+
+
+def test_training_application_does_not_hide_training_error_during_cleanup():
+    module = _import_script_without_runtime("train")
+    app = SimpleNamespace(close=lambda: pytest.fail("close must not hide the training error"))
+
+    with (
+        patch.object(module, "_run_training", side_effect=ImportError("Isaac API mismatch")),
+        pytest.raises(ImportError, match="Isaac API mismatch"),
+    ):
+        module._run_application(SimpleNamespace(), app)
+
+
+def test_training_uses_isaac51_yaml_configuration_snapshots_only():
+    source = (SCRIPTS_DIR / "train.py").read_text()
+
+    assert "dump_yaml" in source
+    assert "dump_pickle" not in source
+    assert "handle_deprecated_rsl_rl_cfg" in source
+
+
 def test_play_parser_import_does_not_load_simulator_or_wandb():
     module = _import_script_without_runtime("play")
 

@@ -49,7 +49,8 @@ def test_tensorboard_motion_runner_saves_checkpoint_and_local_onnx_without_wandb
         output.write_bytes(b"checkpoint")
 
     def export_onnx(_env, _policy, normalizer, path, filename):
-        assert normalizer is runner.obs_normalizer
+        assert _policy is policy
+        assert normalizer is None
         output = Path(path) / filename
         output.write_bytes(b"onnx")
 
@@ -58,10 +59,10 @@ def test_tensorboard_motion_runner_saves_checkpoint_and_local_onnx_without_wandb
     monkeypatch.setattr(module, "attach_onnx_metadata", lambda *args, **kwargs: None)
 
     runner = object.__new__(module.MotionOnPolicyRunner)
-    runner.logger_type = "tensorboard"
+    runner.logger = SimpleNamespace(logger_type="tensorboard")
     runner.env = SimpleNamespace(unwrapped=object())
-    runner.alg = SimpleNamespace(policy=object())
-    runner.obs_normalizer = object()
+    policy = object()
+    runner.alg = SimpleNamespace(get_policy=lambda: policy)
     runner.registry_name = None
 
     with patch.dict(sys.modules, {"wandb": None}):
@@ -94,10 +95,9 @@ def test_wandb_motion_runner_skips_remote_calls_without_a_live_run(tmp_path, mon
     monkeypatch.setattr(module, "attach_onnx_metadata", lambda *args, **kwargs: None)
 
     runner = object.__new__(module.MotionOnPolicyRunner)
-    runner.logger_type = "wandb"
+    runner.logger = SimpleNamespace(logger_type="wandb")
     runner.env = SimpleNamespace(unwrapped=object())
-    runner.alg = SimpleNamespace(policy=object())
-    runner.obs_normalizer = object()
+    runner.alg = SimpleNamespace(get_policy=lambda: object())
     runner.registry_name = "team/project/walk"
 
     with patch.dict(sys.modules, {"wandb": fake_wandb}):

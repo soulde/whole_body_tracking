@@ -9,6 +9,19 @@
 import argparse
 
 
+def _should_continue_replay(*, headless: bool, completed_cycles: int) -> bool:
+    """Run exactly one complete cycle headlessly and loop interactively."""
+    return not (headless and completed_cycles >= 1)
+
+
+def _close_simulation_app(simulation_app, *, headless: bool) -> None:
+    """Use Isaac's immediate shutdown after a completed headless replay."""
+    if headless:
+        simulation_app.close(wait_for_replicator=False, skip_cleanup=True)
+    else:
+        simulation_app.close()
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the replay command-line parser without loading Isaac Sim."""
     parser = argparse.ArgumentParser(description="Replay converted motions.")
@@ -64,11 +77,16 @@ def _run_simulator(args_cli, simulation_app):
             sim.device,
         )
         time_steps = torch.zeros(scene.num_envs, dtype=torch.long, device=sim.device)
+        completed_cycles = 0
 
-        while simulation_app.is_running():
+        while _should_continue_replay(
+            headless=args_cli.headless, completed_cycles=completed_cycles
+        ) and simulation_app.is_running():
             time_steps += 1
             reset_ids = time_steps >= motion.time_step_total
             time_steps[reset_ids] = 0
+            if bool(torch.all(reset_ids).item()):
+                completed_cycles += 1
 
             root_states = robot.data.default_root_state.clone()
             root_states[:, :3] = motion.body_pos_w[time_steps][:, 0] + scene.env_origins[:, None, :]
@@ -107,7 +125,7 @@ def main(argv=None):
     try:
         _run_simulator(args_cli, simulation_app)
     finally:
-        simulation_app.close()
+        _close_simulation_app(simulation_app, headless=args_cli.headless)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
 SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "csv_to_npz.py"
 
@@ -58,3 +59,48 @@ def test_parser_accepts_explicit_output_and_opt_in_flags():
     assert args.output_file == "custom/motion.npz"
     assert args.upload_wandb is True
     assert args.overwrite is True
+
+
+@pytest.mark.parametrize(
+    ("headless", "file_saved", "expected"),
+    [
+        (True, False, True),
+        (True, True, False),
+        (False, True, True),
+    ],
+)
+def test_conversion_loop_stops_after_headless_save_but_keeps_interactive_replay(headless, file_saved, expected):
+    module = _import_without_simulator_or_wandb()
+
+    assert module._should_continue_conversion(headless=headless, file_saved=file_saved) is expected
+
+
+def test_require_conversion_output_reports_missing_path(tmp_path):
+    module = _import_without_simulator_or_wandb()
+    missing = tmp_path / "motion.npz"
+
+    with pytest.raises(RuntimeError, match=f"conversion completed without output: {missing}"):
+        module._require_conversion_output(missing)
+
+
+@pytest.mark.parametrize(
+    ("headless", "expected_kwargs"),
+    [
+        (True, {"wait_for_replicator": False, "skip_cleanup": True}),
+        (False, {}),
+    ],
+)
+def test_close_simulation_app_uses_immediate_shutdown_only_in_headless_mode(headless, expected_kwargs):
+    module = _import_without_simulator_or_wandb()
+
+    class SimulationApp:
+        def __init__(self):
+            self.close_kwargs = None
+
+        def close(self, **kwargs):
+            self.close_kwargs = kwargs
+
+    app = SimulationApp()
+    module._close_simulation_app(app, headless=headless)
+
+    assert app.close_kwargs == expected_kwargs

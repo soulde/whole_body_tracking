@@ -8,6 +8,28 @@
 """
 
 import argparse
+from pathlib import Path
+
+
+def _should_continue_conversion(*, headless: bool, file_saved: bool) -> bool:
+    """Stop after saving in headless mode while preserving interactive replay."""
+    return not (headless and file_saved)
+
+
+def _require_conversion_output(path: Path) -> Path:
+    """Return the saved motion path or fail with an actionable error."""
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise RuntimeError(f"conversion completed without output: {path}")
+    return path
+
+
+def _close_simulation_app(simulation_app, *, headless: bool) -> None:
+    """Use Isaac's immediate shutdown after a completed headless conversion."""
+    if headless:
+        simulation_app.close(wait_for_replicator=False, skip_cleanup=True)
+    else:
+        simulation_app.close()
 
 
 class _MotionArgumentParser(argparse.ArgumentParser):
@@ -43,19 +65,15 @@ def create_parser() -> argparse.ArgumentParser:
 
 def _run_simulator(args_cli, simulation_app):
     """Load the simulator runtime and convert the requested motion."""
-    from pathlib import Path
-
+    import isaaclab.sim as sim_utils
     import numpy as np
     import torch
-
-    import isaaclab.sim as sim_utils
     from isaaclab.assets import ArticulationCfg, AssetBaseCfg
     from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
     from isaaclab.sim import SimulationContext
     from isaaclab.utils import configclass
     from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
     from isaaclab.utils.math import axis_angle_from_quat, quat_conjugate, quat_mul, quat_slerp
-
     from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
     from whole_body_tracking.utils.local_artifacts import atomic_save_npz
 
@@ -70,8 +88,7 @@ def _run_simulator(args_cli, simulation_app):
             spawn=sim_utils.DomeLightCfg(
                 intensity=750.0,
                 texture_file=(
-                    f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/"
-                    "kloofendal_43d_clear_puresky_4k.hdr"
+                    f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr"
                 ),
             ),
         )
@@ -224,7 +241,10 @@ def _run_simulator(args_cli, simulation_app):
         file_saved = False
         # --------------------------------------------------------------------------
 
-        while simulation_app.is_running():
+        while (
+            _should_continue_conversion(headless=args_cli.headless, file_saved=file_saved)
+            and simulation_app.is_running()
+        ):
             (
                 (
                     motion_base_pos,
@@ -353,7 +373,8 @@ def main(argv=None):
     try:
         _run_simulator(args_cli, simulation_app)
     finally:
-        simulation_app.close()
+        _close_simulation_app(simulation_app, headless=args_cli.headless)
+    _require_conversion_output(Path(args_cli.output_file))
 
 
 if __name__ == "__main__":

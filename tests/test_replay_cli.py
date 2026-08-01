@@ -59,3 +59,40 @@ def test_parser_accepts_either_motion_source(arguments, motion_file, registry_na
 
     assert args.motion_file == motion_file
     assert args.registry_name == registry_name
+
+
+@pytest.mark.parametrize(
+    ("headless", "completed_cycles", "expected"),
+    [
+        (True, 0, True),
+        (True, 1, False),
+        (False, 1, True),
+    ],
+)
+def test_replay_runs_one_headless_cycle_and_loops_interactively(headless, completed_cycles, expected):
+    module = _import_without_simulator_or_wandb()
+
+    assert module._should_continue_replay(headless=headless, completed_cycles=completed_cycles) is expected
+
+
+@pytest.mark.parametrize(
+    ("headless", "expected_kwargs"),
+    [
+        (True, {"wait_for_replicator": False, "skip_cleanup": True}),
+        (False, {}),
+    ],
+)
+def test_close_simulation_app_uses_immediate_shutdown_only_in_headless_mode(headless, expected_kwargs):
+    module = _import_without_simulator_or_wandb()
+
+    class SimulationApp:
+        def __init__(self):
+            self.close_kwargs = None
+
+        def close(self, **kwargs):
+            self.close_kwargs = kwargs
+
+    app = SimulationApp()
+    module._close_simulation_app(app, headless=headless)
+
+    assert app.close_kwargs == expected_kwargs

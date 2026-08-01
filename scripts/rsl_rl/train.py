@@ -50,6 +50,7 @@ def _resolve_log_dir(args_cli, agent_cfg) -> str:
 def _run_training(args_cli, simulation_app):
     """Import the Isaac runtime and execute training after the app is launched."""
     import os
+    from importlib import metadata
 
     import gymnasium as gym
     import torch
@@ -62,8 +63,8 @@ def _run_training(args_cli, simulation_app):
         multi_agent_to_single_agent,
     )
     from isaaclab.utils.dict import print_dict
-    from isaaclab.utils.io import dump_pickle, dump_yaml
-    from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+    from isaaclab.utils.io import dump_yaml
+    from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
     from isaaclab_tasks.utils import get_checkpoint_path
     from isaaclab_tasks.utils.hydra import hydra_task_config
     from whole_body_tracking.utils.motion_source import resolve_motion_source
@@ -87,6 +88,7 @@ def _run_training(args_cli, simulation_app):
         agent_cfg.max_iterations = (
             args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
         )
+        agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
 
         env_cfg.seed = agent_cfg.seed
         env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
@@ -129,13 +131,16 @@ def _run_training(args_cli, simulation_app):
 
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-        dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-        dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
-
         runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
         env.close()
 
     train()
+
+
+def _run_application(args_cli, simulation_app) -> None:
+    """Train successfully before beginning graceful simulator shutdown."""
+    _run_training(args_cli, simulation_app)
+    simulation_app.close()
 
 
 def main(argv=None):
@@ -151,10 +156,7 @@ def main(argv=None):
     sys.argv = [sys.argv[0], *hydra_args]
     app_launcher = AppLauncher(args_cli)
     simulation_app = app_launcher.app
-    try:
-        _run_training(args_cli, simulation_app)
-    finally:
-        simulation_app.close()
+    _run_application(args_cli, simulation_app)
 
 
 if __name__ == "__main__":
