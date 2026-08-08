@@ -163,21 +163,28 @@ def test_unexpected_timeout_fails_but_same_step_completion_has_priority():
 
     module._require_no_unexpected_timeouts(
         timeout_mask=np.array([False, True]),
+        failed_mask=np.array([False, False]),
         completed_mask=np.array([False, True]),
+    )
+    module._require_no_unexpected_timeouts(
+        timeout_mask=np.array([False, True]),
+        failed_mask=np.array([False, True]),
+        completed_mask=np.array([False, False]),
     )
     with pytest.raises(RuntimeError, match=r"unexpected timeout.*1"):
         module._require_no_unexpected_timeouts(
             timeout_mask=np.array([False, True]),
+            failed_mask=np.array([False, False]),
             completed_mask=np.array([False, False]),
         )
 
 
-def test_verify_unchanged_file_rejects_evaluation_input_replacement(tmp_path):
+def test_snapshot_file_hashes_the_immutable_bytes_consumed_by_evaluation(tmp_path):
     module = _import_evaluate_without_runtime()
     checkpoint = tmp_path / "model.pt"
     checkpoint.write_bytes(b"first")
-    original_hash = module._sha256_file(checkpoint)
+    snapshot, digest = module._snapshot_file(checkpoint, tmp_path / "snapshots")
     checkpoint.write_bytes(b"second")
 
-    with pytest.raises(RuntimeError, match="changed during evaluation"):
-        module._verify_unchanged_file(checkpoint, original_hash)
+    assert snapshot.read_bytes() == b"first"
+    assert digest == "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e"
