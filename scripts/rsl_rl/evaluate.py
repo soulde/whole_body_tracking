@@ -15,6 +15,7 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the evaluation parser without importing the Isaac runtime."""
     parser = argparse.ArgumentParser(description="Evaluate a local RSL-RL motion-tracking checkpoint.")
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--motion_id", choices=("walk_run", "jump", "kick"), required=True)
     parser.add_argument("--motion_file", required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--episodes", type=int, default=100)
@@ -191,7 +192,7 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                 summary = accumulator.result()
                 payload = {
                     "schema_version": 1,
-                    "motion_id": motion_file.parent.name,
+                    "motion_id": args_cli.motion_id,
                     "seed": args_cli.seed,
                     "episodes": summary.episodes,
                     "completed": summary.completed,

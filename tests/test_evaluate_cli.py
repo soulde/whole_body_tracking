@@ -42,6 +42,16 @@ def test_evaluate_parser_requires_local_artifacts_seed_and_output():
 
     for arguments in (
         [],
+        [
+            "--checkpoint",
+            "model.pt",
+            "--motion_file",
+            "motion.npz",
+            "--seed",
+            "42",
+            "--output_file",
+            "result.json",
+        ],
         ["--motion_file", "motion.npz", "--seed", "42", "--output_file", "result.json"],
         ["--checkpoint", "model.pt", "--seed", "42", "--output_file", "result.json"],
         ["--checkpoint", "model.pt", "--motion_file", "motion.npz", "--output_file", "result.json"],
@@ -58,6 +68,8 @@ def test_evaluate_parser_uses_clean_evaluation_defaults():
         [
             "--checkpoint",
             "model.pt",
+            "--motion_id",
+            "jump",
             "--motion_file",
             "motion.npz",
             "--seed",
