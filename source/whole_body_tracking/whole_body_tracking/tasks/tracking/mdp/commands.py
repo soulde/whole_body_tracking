@@ -276,6 +276,29 @@ class MotionCommand(CommandTerm):
             env_ids=env_ids,
         )
 
+    def reset_to_start(self, env_ids: Sequence[int]) -> None:
+        """Reset selected environments to the exact first motion frame for evaluation."""
+        if len(env_ids) == 0:
+            return
+        self.time_steps[env_ids] = 0
+
+        root_pos = self.motion.body_pos_w[0, 0].repeat(len(env_ids), 1) + self._env.scene.env_origins[env_ids]
+        root_state = torch.cat(
+            [
+                root_pos,
+                self.motion.body_quat_w[0, 0].repeat(len(env_ids), 1),
+                self.motion.body_lin_vel_w[0, 0].repeat(len(env_ids), 1),
+                self.motion.body_ang_vel_w[0, 0].repeat(len(env_ids), 1),
+            ],
+            dim=-1,
+        )
+        joint_pos = self.motion.joint_pos[0].repeat(len(env_ids), 1)
+        joint_vel = self.motion.joint_vel[0].repeat(len(env_ids), 1)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
+        self.bin_failed_count.zero_()
+        self._current_bin_failed.zero_()
+
     def _update_command(self):
         self.time_steps += 1
         env_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
