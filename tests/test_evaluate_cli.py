@@ -130,3 +130,54 @@ def test_initial_reset_starts_every_environment_at_frame_zero():
     assert command.start_ids == [[0, 1, 2]]
     assert history_reset_ids == [[0, 1, 2]]
     assert observations["policy"].tolist() == [[2.0]]
+
+
+def test_metric_capture_preserves_post_physics_error_before_automatic_reset():
+    module = _import_evaluate_without_runtime()
+
+    class _Command:
+        def __init__(self):
+            self.physical_error = np.array([0.1, 0.2])
+            self.metrics = {"error_body_pos": self.physical_error.copy()}
+
+        def _update_metrics(self):
+            self.metrics["error_body_pos"] = self.physical_error.copy()
+
+    command = _Command()
+
+    class _TerminationManager:
+        def compute(self):
+            command.physical_error = np.array([0.7, 0.9])
+            return np.array([False, True])
+
+    manager = _TerminationManager()
+    captured = module._install_terminal_metric_capture(manager, command)
+
+    assert manager.compute().tolist() == [False, True]
+    command.metrics["error_body_pos"][:] = 0.0  # model Isaac's post-reset metric update
+    assert captured().tolist() == [0.7, 0.9]
+
+
+def test_unexpected_timeout_fails_but_same_step_completion_has_priority():
+    module = _import_evaluate_without_runtime()
+
+    module._require_no_unexpected_timeouts(
+        timeout_mask=np.array([False, True]),
+        completed_mask=np.array([False, True]),
+    )
+    with pytest.raises(RuntimeError, match=r"unexpected timeout.*1"):
+        module._require_no_unexpected_timeouts(
+            timeout_mask=np.array([False, True]),
+            completed_mask=np.array([False, False]),
+        )
+
+
+def test_verify_unchanged_file_rejects_evaluation_input_replacement(tmp_path):
+    module = _import_evaluate_without_runtime()
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"first")
+    original_hash = module._sha256_file(checkpoint)
+    checkpoint.write_bytes(b"second")
+
+    with pytest.raises(RuntimeError, match="changed during evaluation"):
+        module._verify_unchanged_file(checkpoint, original_hash)

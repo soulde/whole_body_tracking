@@ -30,6 +30,42 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verify_unchanged_file(path: Path, expected_sha256: str) -> None:
+    if _sha256_file(path) != expected_sha256:
+        raise RuntimeError(f"evaluation input changed during evaluation: {path}")
+
+
+def _install_terminal_metric_capture(termination_manager, command):
+    """Capture the post-physics body error before Isaac automatically resets environments."""
+    original_compute = termination_manager.compute
+    captured = None
+
+    def compute_and_capture():
+        nonlocal captured
+        result = original_compute()
+        command._update_metrics()
+        body_error = command.metrics["error_body_pos"]
+        captured = body_error.clone() if hasattr(body_error, "clone") else body_error.copy()
+        return result
+
+    def get_captured():
+        if captured is None:
+            raise RuntimeError("terminal metric capture has not run")
+        return captured
+
+    termination_manager.compute = compute_and_capture
+    return get_captured
+
+
+def _require_no_unexpected_timeouts(timeout_mask, completed_mask) -> None:
+    import torch
+
+    unexpected = torch.as_tensor(timeout_mask, dtype=torch.bool) & ~torch.as_tensor(completed_mask, dtype=torch.bool)
+    unexpected_ids = torch.where(unexpected)[0]
+    if unexpected_ids.numel() > 0:
+        raise RuntimeError(f"unexpected timeout before full motion completion in environments {unexpected_ids.tolist()}")
+
+
 def _reset_all_to_start(base_env, command):
     import torch
 
@@ -80,6 +116,9 @@ def _run_evaluation(args_cli, simulation_app) -> None:
     if output_file.exists():
         raise FileExistsError(output_file)
 
+    checkpoint_sha256 = _sha256_file(checkpoint)
+    motion_sha256 = _sha256_file(motion_file)
+
     started_at = datetime.now(UTC)
 
     @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -100,6 +139,7 @@ def _run_evaluation(args_cli, simulation_app) -> None:
             runner.load(str(checkpoint))
             policy = runner.get_inference_policy(device=base_env.device)
             command = base_env.command_manager.get_term("motion")
+            captured_body_error = _install_terminal_metric_capture(base_env.termination_manager, command)
             accumulator = EpisodeAccumulator(args_cli.num_envs, args_cli.episodes)
 
             observations = TensorDict(
@@ -113,11 +153,12 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                     actions = policy(observations)
                     observations, _, _, _ = wrapped_env.step(actions)
 
-                body_error = command.metrics["error_body_pos"]
+                body_error = captured_body_error()
                 if not torch.all(torch.isfinite(body_error)) or torch.any(body_error < 0):
                     raise RuntimeError("invalid error_body_pos during evaluation")
                 failed = base_env.termination_manager.terminated.clone()
                 completed = last_frame & ~failed
+                _require_no_unexpected_timeouts(base_env.termination_manager.time_outs, completed)
                 accumulator.update(
                     body_error.detach().cpu().numpy(),
                     failed.detach().cpu().numpy(),
@@ -126,17 +167,16 @@ def _run_evaluation(args_cli, simulation_app) -> None:
 
                 failed_ids = torch.where(failed)[0]
                 completed_ids = torch.where(completed)[0]
-                timeout_ids = torch.where(base_env.termination_manager.time_outs & ~failed)[0]
-                if failed_ids.numel() + completed_ids.numel() + timeout_ids.numel() > 0:
-                    raw_observations = _reset_terminal_environments(
-                        base_env, command, failed_ids, completed_ids, timeout_ids
-                    )
-                    accumulator.reset(torch.cat([failed_ids, completed_ids, timeout_ids]).cpu().tolist())
+                if failed_ids.numel() + completed_ids.numel() > 0:
+                    raw_observations = _reset_terminal_environments(base_env, command, failed_ids, completed_ids)
+                    accumulator.reset(torch.cat([failed_ids, completed_ids]).cpu().tolist())
                     observations = TensorDict(raw_observations, batch_size=[args_cli.num_envs])
 
             if not accumulator.done:
                 raise RuntimeError("simulation stopped before evaluation completed")
             summary = accumulator.result()
+            _verify_unchanged_file(checkpoint, checkpoint_sha256)
+            _verify_unchanged_file(motion_file, motion_sha256)
             payload = {
                 "schema_version": 1,
                 "motion_id": motion_file.parent.name,
@@ -147,9 +187,9 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                 "tracking_errors": list(summary.tracking_errors),
                 "control_hz": 50,
                 "checkpoint_path": str(checkpoint),
-                "checkpoint_sha256": _sha256_file(checkpoint),
+                "checkpoint_sha256": checkpoint_sha256,
                 "motion_file": str(motion_file),
-                "motion_npz_sha256": _sha256_file(motion_file),
+                "motion_npz_sha256": motion_sha256,
                 "started_at_utc": started_at.isoformat(),
                 "ended_at_utc": datetime.now(UTC).isoformat(),
             }
