@@ -289,3 +289,157 @@ def test_evaluator_migrates_current_rsl_rl_config_before_runner_construction(tmp
         module._run_evaluation(args, SimpleNamespace())
 
     assert events == ["migrate", "to_dict", "runner", "close"]
+
+
+def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
+    module = _import_evaluate_without_runtime()
+    checkpoint = tmp_path / "model.pt"
+    motion = tmp_path / "motion.npz"
+    checkpoint.write_bytes(b"checkpoint")
+    motion.write_bytes(b"motion")
+    events = []
+
+    import torch
+
+    class Command:
+        def __init__(self):
+            self.time_steps = torch.tensor([0])
+            self.motion = SimpleNamespace(time_step_total=1)
+            self.metrics = {"error_body_pos": torch.tensor([0.25])}
+
+        def reset_to_start(self, _env_ids):
+            events.append("reset_to_start")
+
+        def _update_metrics(self):
+            return None
+
+    class TerminationManager:
+        terminated = torch.tensor([False])
+        time_outs = torch.tensor([False])
+
+        def compute(self):
+            return self.terminated
+
+    command = Command()
+
+    class Env:
+        device = "cpu"
+        num_envs = 1
+
+        def __init__(self):
+            self.command_manager = SimpleNamespace(get_term=lambda _name: command)
+            self.termination_manager = TerminationManager()
+            self.observation_manager = SimpleNamespace(
+                reset=lambda _env_ids: None,
+                compute=lambda **_kwargs: {"policy": torch.zeros((1, 1))},
+            )
+            self.mutable_state = None
+
+        def _reset_idx(self, _env_ids):
+            self.mutable_state.add_(1)
+            events.append(("reset_value", self.mutable_state.item()))
+
+        def close(self):
+            events.append("close")
+
+    env = Env()
+
+    class Wrapper:
+        def __init__(self, value):
+            self.unwrapped = value
+
+        def step(self, _actions):
+            events.append(
+                ("step_context", torch.is_inference_mode_enabled(), torch.is_grad_enabled())
+            )
+            env.mutable_state = torch.zeros(1)
+            env.termination_manager.compute()
+            return {"policy": torch.zeros((1, 1))}, None, None, None
+
+    def policy(_observations):
+        events.append(("policy_context", torch.is_inference_mode_enabled(), torch.is_grad_enabled()))
+        return torch.zeros((1, 1))
+
+    class Runner:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def load(self, _checkpoint):
+            return None
+
+        def get_inference_policy(self, **_kwargs):
+            return policy
+
+    class Accumulator:
+        def __init__(self, *_args):
+            self.done = False
+
+        def update(self, *_args):
+            self.done = True
+
+        def reset(self, _env_ids):
+            return None
+
+        def result(self):
+            return SimpleNamespace(episodes=1, completed=1, falls=0, tracking_errors=(0.25,))
+
+    class TensorDict(dict):
+        def __init__(self, values, batch_size):
+            assert batch_size == [1]
+            super().__init__(values)
+
+    agent_cfg = SimpleNamespace(seed=0, device="cpu", to_dict=dict)
+    env_cfg = SimpleNamespace(
+        scene=SimpleNamespace(num_envs=0),
+        seed=0,
+        events=object(),
+        curriculum=object(),
+        commands=SimpleNamespace(motion=SimpleNamespace(motion_file="old.npz")),
+    )
+
+    def hydra_task_config(_task, _entry_point):
+        def decorate(function):
+            return lambda: function(env_cfg, agent_cfg)
+
+        return decorate
+
+    fake_modules = {
+        "gymnasium": SimpleNamespace(make=lambda *_args, **_kwargs: env),
+        "whole_body_tracking.tasks": ModuleType("whole_body_tracking.tasks"),
+        "isaaclab_rl": ModuleType("isaaclab_rl"),
+        "isaaclab_rl.rsl_rl": SimpleNamespace(
+            RslRlVecEnvWrapper=Wrapper,
+            handle_deprecated_rsl_rl_cfg=lambda config, _version: config,
+        ),
+        "isaaclab_tasks": ModuleType("isaaclab_tasks"),
+        "isaaclab_tasks.utils": ModuleType("isaaclab_tasks.utils"),
+        "isaaclab_tasks.utils.hydra": SimpleNamespace(hydra_task_config=hydra_task_config),
+        "rsl_rl": ModuleType("rsl_rl"),
+        "rsl_rl.runners": SimpleNamespace(OnPolicyRunner=Runner),
+        "tensordict": SimpleNamespace(TensorDict=TensorDict),
+        "whole_body_tracking.utils.evaluation": SimpleNamespace(
+            EpisodeAccumulator=Accumulator,
+            atomic_write_evaluation_json=lambda *_args, **_kwargs: None,
+        ),
+    }
+    args = SimpleNamespace(
+        checkpoint=str(checkpoint),
+        motion_file=str(motion),
+        output_file=str(tmp_path / "result.json"),
+        episodes=1,
+        num_envs=1,
+        seed=42,
+        task="Tracking-Flat-G1-v0",
+        motion_id="walk_run",
+    )
+
+    with (
+        patch.dict(sys.modules, fake_modules),
+        patch("importlib.metadata.version", return_value="2.3.3"),
+    ):
+        module._run_evaluation(args, SimpleNamespace(is_running=lambda: True))
+
+    assert ("policy_context", False, False) in events
+    assert ("step_context", False, False) in events
+    assert ("reset_value", 1.0) in events
+    assert events[-1] == "close"

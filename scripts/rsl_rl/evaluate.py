@@ -167,7 +167,7 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                     if not all(torch.all(torch.isfinite(value)) for value in observations.values()):
                         raise RuntimeError("non-finite policy observation during evaluation")
                     last_frame = command.time_steps >= command.motion.time_step_total - 1
-                    with torch.inference_mode():
+                    with torch.no_grad():
                         actions = policy(observations)
                         observations, _, _, _ = wrapped_env.step(actions)
 
