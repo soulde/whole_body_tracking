@@ -25,6 +25,13 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _disable_manager_terms(config):
+    """Disable configured manager terms without removing their config container."""
+    for term_name in tuple(vars(config)):
+        setattr(config, term_name, None)
+    return config
+
+
 def _snapshot_file(path: Path, directory: Path) -> tuple[Path, str]:
     """Copy and hash one immutable input stream used by the evaluator."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -142,8 +149,8 @@ def _run_evaluation(args_cli, simulation_app) -> None:
         def evaluate(env_cfg, agent_cfg):
             env_cfg.scene.num_envs = args_cli.num_envs
             env_cfg.seed = args_cli.seed
-            env_cfg.events = None
-            env_cfg.curriculum = None
+            _disable_manager_terms(env_cfg.events)
+            _disable_manager_terms(env_cfg.curriculum)
             env_cfg.commands.motion.motion_file = str(motion_input)
             agent_cfg.seed = args_cli.seed
 

@@ -1,6 +1,7 @@
 import builtins
 import importlib.util
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -82,6 +83,34 @@ def test_evaluate_parser_uses_clean_evaluation_defaults():
     assert args.episodes == 100
     assert args.num_envs == 100
     assert args.task == "Tracking-Flat-G1-v0"
+
+
+def test_disable_manager_terms_preserves_dataclass_and_configclass_like_containers():
+    module = _import_evaluate_without_runtime()
+
+    @dataclass
+    class DataclassManagerCfg:
+        reset: object
+        interval: object
+
+    class ConfigclassLikeManagerCfg:
+        def __init__(self):
+            self.curriculum_term = object()
+
+    containers = (
+        DataclassManagerCfg(reset=object(), interval=object()),
+        ConfigclassLikeManagerCfg(),
+    )
+
+    for container in containers:
+        identity = id(container)
+        result = module._disable_manager_terms(container)
+
+        assert result is container
+        assert id(result) == identity
+        assert result is not None
+        assert vars(result)
+        assert all(value is None for value in vars(result).values())
 
 
 class _FakeBaseEnv:
@@ -225,14 +254,23 @@ def test_evaluator_migrates_current_rsl_rl_config_before_runner_construction(tmp
             return {"actor": dict(self.actor)}
 
     agent_cfg = AgentCfg()
+    event_config = SimpleNamespace(reset=object(), interval=object())
+    curriculum_config = SimpleNamespace(progress=object())
     env_cfg = SimpleNamespace(
         scene=SimpleNamespace(num_envs=0),
         seed=0,
-        events=object(),
-        curriculum=object(),
+        events=event_config,
+        curriculum=curriculum_config,
         commands=SimpleNamespace(motion=SimpleNamespace(motion_file="old.npz")),
     )
     env = SimpleNamespace(close=lambda: events.append("close"))
+
+    def make_env(*_args, **_kwargs):
+        assert env_cfg.events is event_config
+        assert env_cfg.curriculum is curriculum_config
+        assert all(value is None for value in vars(event_config).values())
+        assert all(value is None for value in vars(curriculum_config).values())
+        return env
 
     def hydra_task_config(_task, _entry_point):
         def decorate(function):
@@ -252,7 +290,7 @@ def test_evaluator_migrates_current_rsl_rl_config_before_runner_construction(tmp
         raise RunnerReached
 
     fake_modules = {
-        "gymnasium": SimpleNamespace(make=lambda *_args, **_kwargs: env),
+        "gymnasium": SimpleNamespace(make=make_env),
         "whole_body_tracking.tasks": ModuleType("whole_body_tracking.tasks"),
         "isaaclab_rl": ModuleType("isaaclab_rl"),
         "isaaclab_rl.rsl_rl": SimpleNamespace(
@@ -392,8 +430,8 @@ def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
     env_cfg = SimpleNamespace(
         scene=SimpleNamespace(num_envs=0),
         seed=0,
-        events=object(),
-        curriculum=object(),
+        events=SimpleNamespace(randomize=object()),
+        curriculum=SimpleNamespace(),
         commands=SimpleNamespace(motion=SimpleNamespace(motion_file="old.npz")),
     )
 
