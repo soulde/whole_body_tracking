@@ -109,10 +109,12 @@ def _reset_terminal_environments(base_env, command, failed_ids, completed_ids, t
 
 
 def _run_evaluation(args_cli, simulation_app) -> None:
+    from importlib import metadata
+
     import gymnasium as gym
     import torch
     import whole_body_tracking.tasks  # noqa: F401
-    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+    from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
     from isaaclab_tasks.utils.hydra import hydra_task_config
     from rsl_rl.runners import OnPolicyRunner
     from tensordict import TensorDict
@@ -150,6 +152,7 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                 env = gym.make(args_cli.task, cfg=env_cfg)
                 wrapped_env = RslRlVecEnvWrapper(env)
                 base_env = wrapped_env.unwrapped
+                agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
                 runner = OnPolicyRunner(wrapped_env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
                 runner.load(str(checkpoint_input))
                 policy = runner.get_inference_policy(device=base_env.device)

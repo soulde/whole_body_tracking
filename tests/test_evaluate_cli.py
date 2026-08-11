@@ -2,7 +2,7 @@ import builtins
 import importlib.util
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -200,3 +200,92 @@ def test_snapshot_file_hashes_the_immutable_bytes_consumed_by_evaluation(tmp_pat
 
     assert snapshot.read_bytes() == b"first"
     assert digest == "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e"
+
+
+def test_evaluator_migrates_current_rsl_rl_config_before_runner_construction(tmp_path):
+    module = _import_evaluate_without_runtime()
+    checkpoint = tmp_path / "model.pt"
+    motion = tmp_path / "motion.npz"
+    checkpoint.write_bytes(b"checkpoint")
+    motion.write_bytes(b"motion")
+    events = []
+
+    class RunnerReached(Exception):
+        pass
+
+    class AgentCfg:
+        seed = 0
+        device = "cpu"
+
+        def __init__(self):
+            self.actor = {}
+
+        def to_dict(self):
+            events.append("to_dict")
+            return {"actor": dict(self.actor)}
+
+    agent_cfg = AgentCfg()
+    env_cfg = SimpleNamespace(
+        scene=SimpleNamespace(num_envs=0),
+        seed=0,
+        events=object(),
+        curriculum=object(),
+        commands=SimpleNamespace(motion=SimpleNamespace(motion_file="old.npz")),
+    )
+    env = SimpleNamespace(close=lambda: events.append("close"))
+
+    def hydra_task_config(_task, _entry_point):
+        def decorate(function):
+            return lambda: function(env_cfg, agent_cfg)
+
+        return decorate
+
+    def migrate(config, version):
+        assert version == "2.3.3"
+        events.append("migrate")
+        config.actor["class_name"] = "ActorCritic"
+        return config
+
+    def runner(_env, config, **_kwargs):
+        events.append("runner")
+        assert config["actor"]["class_name"] == "ActorCritic"
+        raise RunnerReached
+
+    fake_modules = {
+        "gymnasium": SimpleNamespace(make=lambda *_args, **_kwargs: env),
+        "whole_body_tracking.tasks": ModuleType("whole_body_tracking.tasks"),
+        "isaaclab_rl": ModuleType("isaaclab_rl"),
+        "isaaclab_rl.rsl_rl": SimpleNamespace(
+            RslRlVecEnvWrapper=lambda value: SimpleNamespace(unwrapped=value),
+            handle_deprecated_rsl_rl_cfg=migrate,
+        ),
+        "isaaclab_tasks": ModuleType("isaaclab_tasks"),
+        "isaaclab_tasks.utils": ModuleType("isaaclab_tasks.utils"),
+        "isaaclab_tasks.utils.hydra": SimpleNamespace(hydra_task_config=hydra_task_config),
+        "rsl_rl": ModuleType("rsl_rl"),
+        "rsl_rl.runners": SimpleNamespace(OnPolicyRunner=runner),
+        "tensordict": SimpleNamespace(TensorDict=dict),
+        "whole_body_tracking.utils.evaluation": SimpleNamespace(
+            EpisodeAccumulator=object,
+            atomic_write_evaluation_json=lambda *_args, **_kwargs: None,
+        ),
+    }
+    args = SimpleNamespace(
+        checkpoint=str(checkpoint),
+        motion_file=str(motion),
+        output_file=str(tmp_path / "result.json"),
+        episodes=1,
+        num_envs=1,
+        seed=42,
+        task="Tracking-Flat-G1-v0",
+        motion_id="walk_run",
+    )
+
+    with (
+        patch.dict(sys.modules, fake_modules),
+        patch("importlib.metadata.version", return_value="2.3.3"),
+        pytest.raises(RunnerReached),
+    ):
+        module._run_evaluation(args, SimpleNamespace())
+
+    assert events == ["migrate", "to_dict", "runner", "close"]
