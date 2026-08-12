@@ -118,9 +118,18 @@ class _FakeBaseEnv:
         self.device = "cpu"
         self.reset_ids = []
         self.history_reset_ids = []
+        self.events = []
+        self.scene = SimpleNamespace(write_data_to_sim=lambda: self.events.append("write"))
+        self.sim = SimpleNamespace(forward=lambda: self.events.append("forward"))
         self.observation_manager = SimpleNamespace(
-            reset=lambda env_ids: self.history_reset_ids.append(env_ids.tolist()),
-            compute=lambda **_: {"policy": np.array([[1.0]])},
+            reset=lambda env_ids: (
+                self.history_reset_ids.append(env_ids.tolist()),
+                self.events.append("history_reset"),
+            ),
+            compute=lambda **_: (
+                self.events.append("compute"),
+                {"policy": np.array([[1.0]])},
+            )[1],
         )
 
     def _reset_idx(self, env_ids):
@@ -150,6 +159,7 @@ def test_terminal_reset_restarts_failed_and_completed_environments_at_frame_zero
     assert env.reset_ids == [[2, 4]]
     assert command.start_ids == [[1, 2, 3, 4]]
     assert env.history_reset_ids == [[1, 2, 3, 4]]
+    assert env.events == ["write", "forward", "history_reset", "compute"]
     assert observations["policy"].tolist() == [[1.0]]
 
 
@@ -157,12 +167,21 @@ def test_initial_reset_starts_every_environment_at_frame_zero():
     module = _import_evaluate_without_runtime()
     command = _FakeCommand()
     history_reset_ids = []
+    events = []
     env = SimpleNamespace(
         num_envs=3,
         device="cpu",
+        scene=SimpleNamespace(write_data_to_sim=lambda: events.append("write")),
+        sim=SimpleNamespace(forward=lambda: events.append("forward")),
         observation_manager=SimpleNamespace(
-            reset=lambda env_ids: history_reset_ids.append(env_ids.tolist()),
-            compute=lambda **_: {"policy": np.array([[2.0]])},
+            reset=lambda env_ids: (
+                history_reset_ids.append(env_ids.tolist()),
+                events.append("history_reset"),
+            ),
+            compute=lambda **_: (
+                events.append("compute"),
+                {"policy": np.array([[2.0]])},
+            )[1],
         ),
     )
 
@@ -170,6 +189,7 @@ def test_initial_reset_starts_every_environment_at_frame_zero():
 
     assert command.start_ids == [[0, 1, 2]]
     assert history_reset_ids == [[0, 1, 2]]
+    assert events == ["write", "forward", "history_reset", "compute"]
     assert observations["policy"].tolist() == [[2.0]]
 
 
@@ -367,6 +387,8 @@ def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
         def __init__(self):
             self.command_manager = SimpleNamespace(get_term=lambda _name: command)
             self.termination_manager = TerminationManager()
+            self.scene = SimpleNamespace(write_data_to_sim=lambda: events.append("write"))
+            self.sim = SimpleNamespace(forward=lambda: events.append("forward"))
             self.observation_manager = SimpleNamespace(
                 reset=lambda _env_ids: None,
                 compute=lambda **_kwargs: {"policy": torch.zeros((1, 1))},

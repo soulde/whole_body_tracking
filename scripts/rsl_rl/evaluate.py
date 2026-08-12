@@ -91,6 +91,8 @@ def _reset_all_to_start(base_env, command):
 
     env_ids = torch.arange(base_env.num_envs, device=base_env.device)
     command.reset_to_start(env_ids)
+    base_env.scene.write_data_to_sim()
+    base_env.sim.forward()
     base_env.observation_manager.reset(env_ids)
     return base_env.observation_manager.compute(update_history=True)
 
@@ -111,6 +113,8 @@ def _reset_terminal_environments(base_env, command, failed_ids, completed_ids, t
     if terminal.numel() > 0:
         terminal = torch.unique(terminal, sorted=True)
         command.reset_to_start(terminal)
+        base_env.scene.write_data_to_sim()
+        base_env.sim.forward()
         base_env.observation_manager.reset(terminal)
     return base_env.observation_manager.compute(update_history=True)
 
