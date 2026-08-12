@@ -79,6 +79,16 @@ def test_training_parser_accepts_explicit_log_directory():
     )
 
 
+def test_training_parser_accepts_explicit_resume_checkpoint():
+    parser = _import_script_without_runtime("train").create_parser()
+
+    args = parser.parse_args(
+        ["--motion_file", "motion.npz", "--resume_checkpoint", "artifacts/runs/run-1/model_29999.pt"]
+    )
+
+    assert args.resume_checkpoint == "artifacts/runs/run-1/model_29999.pt"
+
+
 def test_training_application_closes_after_success():
     module = _import_script_without_runtime("train")
     events = []

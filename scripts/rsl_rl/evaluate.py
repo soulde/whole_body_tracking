@@ -83,7 +83,9 @@ def _require_no_unexpected_timeouts(timeout_mask, failed_mask, completed_mask) -
     )
     unexpected_ids = torch.where(unexpected)[0]
     if unexpected_ids.numel() > 0:
-        raise RuntimeError(f"unexpected timeout before full motion completion in environments {unexpected_ids.tolist()}")
+        raise RuntimeError(
+            f"unexpected timeout before full motion completion in environments {unexpected_ids.tolist()}"
+        )
 
 
 def _reset_all_to_start(base_env, command):

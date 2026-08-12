@@ -25,6 +25,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
     parser.add_argument("--max_iterations", type=int, default=None, help="RL policy training iterations.")
     parser.add_argument("--log_dir", type=str, default=None, help="Exact directory for local training outputs.")
+    parser.add_argument(
+        "--resume_checkpoint", type=str, default=None, help="Exact local checkpoint path to resume from."
+    )
     motion_source = parser.add_mutually_exclusive_group(required=True)
     motion_source.add_argument("--motion_file", type=str, help="Path to a local motion NPZ file.")
     motion_source.add_argument("--registry_name", type=str, help="Name of a WandB motion registry artifact.")
@@ -124,7 +127,13 @@ def _run_training(args_cli, simulation_app):
             registry_name=args_cli.registry_name,
         )
         runner.add_git_repo_to_log(__file__)
-        if agent_cfg.resume:
+        if args_cli.resume_checkpoint is not None:
+            resume_path = os.path.abspath(args_cli.resume_checkpoint)
+            if not os.path.isfile(resume_path):
+                raise FileNotFoundError(f"resume checkpoint does not exist: {resume_path}")
+            print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+            runner.load(resume_path)
+        elif agent_cfg.resume:
             resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
             print(f"[INFO]: Loading model checkpoint from: {resume_path}")
             runner.load(resume_path)
