@@ -119,6 +119,16 @@ def test_training_uses_isaac51_yaml_configuration_snapshots_only():
     assert "handle_deprecated_rsl_rl_cfg" in source
 
 
+def test_tracking_terminations_use_current_isaac_quaternion_api():
+    source = (
+        Path(__file__).parents[1]
+        / "source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/terminations.py"
+    ).read_text(encoding="utf-8")
+
+    assert "quat_apply_inverse" in source
+    assert "quat_rotate_inverse" not in source
+
+
 def test_play_parser_import_does_not_load_simulator_or_wandb():
     module = _import_script_without_runtime("play")
 
