@@ -95,6 +95,30 @@ def _reset_all_to_start(base_env, command):
     command.reset_to_start(env_ids)
     base_env.scene.write_data_to_sim()
     base_env.sim.forward()
+    command.update_reference_alignment()
+    base_env.observation_manager.reset(env_ids)
+    return base_env.observation_manager.compute(update_history=True)
+
+
+def _segment_start_frames(num_envs: int, motion_frames: int, horizon_steps: int, seed: int):
+    import torch
+
+    available = motion_frames - horizon_steps + 1
+    if available < num_envs:
+        raise ValueError("motion does not contain enough full-horizon segment starts")
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    return torch.randperm(available, generator=generator)[:num_envs]
+
+
+def _reset_all_to_frames(base_env, command, frame_ids):
+    import torch
+
+    env_ids = torch.arange(base_env.num_envs, device=base_env.device)
+    frames = torch.as_tensor(frame_ids, dtype=torch.long, device=base_env.device)
+    command.reset_to_frame(env_ids, frames)
+    base_env.scene.write_data_to_sim()
+    base_env.sim.forward()
+    command.update_reference_alignment()
     base_env.observation_manager.reset(env_ids)
     return base_env.observation_manager.compute(update_history=True)
 
@@ -117,6 +141,7 @@ def _reset_terminal_environments(base_env, command, failed_ids, completed_ids, t
         command.reset_to_start(terminal)
         base_env.scene.write_data_to_sim()
         base_env.sim.forward()
+        command.update_reference_alignment()
         base_env.observation_manager.reset(terminal)
     return base_env.observation_manager.compute(update_history=True)
 
@@ -141,6 +166,8 @@ def _run_evaluation(args_cli, simulation_app) -> None:
             raise FileNotFoundError(f"{label} does not exist: {path}")
     if args_cli.episodes < 1 or args_cli.num_envs < 1:
         raise ValueError("episodes and num_envs must be positive")
+    if args_cli.episodes != args_cli.num_envs:
+        raise ValueError("clean segment evaluation requires episodes to equal num_envs")
     if output_file.exists():
         raise FileExistsError(output_file)
 
@@ -170,11 +197,15 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                 runner.load(str(checkpoint_input))
                 policy = runner.get_inference_policy(device=base_env.device)
                 command = base_env.command_manager.get_term("motion")
+                horizon_steps = base_env.max_episode_length
+                start_frames = _segment_start_frames(
+                    args_cli.num_envs, command.motion.time_step_total, horizon_steps, args_cli.seed
+                )
                 captured_body_error = _install_terminal_metric_capture(base_env.termination_manager, command)
                 accumulator = EpisodeAccumulator(args_cli.num_envs, args_cli.episodes)
 
                 observations = TensorDict(
-                    _reset_all_to_start(base_env, command), batch_size=[args_cli.num_envs]
+                    _reset_all_to_frames(base_env, command, start_frames), batch_size=[args_cli.num_envs]
                 )
                 while simulation_app.is_running() and not accumulator.done:
                     if not all(torch.all(torch.isfinite(value)) for value in observations.values()):
@@ -188,26 +219,18 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                     if not torch.all(torch.isfinite(body_error)) or torch.any(body_error < 0):
                         raise RuntimeError("invalid error_body_pos during evaluation")
                     failed = base_env.termination_manager.terminated.clone()
-                    completed = last_frame & ~failed
-                    _require_no_unexpected_timeouts(base_env.termination_manager.time_outs, failed, completed)
+                    completed = (last_frame | base_env.termination_manager.time_outs) & ~failed
                     accumulator.update(
                         body_error.detach().cpu().numpy(),
                         failed.detach().cpu().numpy(),
                         completed.detach().cpu().numpy(),
                     )
 
-                    failed_ids = torch.where(failed)[0]
-                    completed_ids = torch.where(completed)[0]
-                    if failed_ids.numel() + completed_ids.numel() > 0:
-                        raw_observations = _reset_terminal_environments(base_env, command, failed_ids, completed_ids)
-                        accumulator.reset(torch.cat([failed_ids, completed_ids]).cpu().tolist())
-                        observations = TensorDict(raw_observations, batch_size=[args_cli.num_envs])
-
                 if not accumulator.done:
                     raise RuntimeError("simulation stopped before evaluation completed")
                 summary = accumulator.result()
                 payload = {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "motion_id": args_cli.motion_id,
                     "seed": args_cli.seed,
                     "episodes": summary.episodes,
@@ -215,6 +238,8 @@ def _run_evaluation(args_cli, simulation_app) -> None:
                     "falls": summary.falls,
                     "tracking_errors": list(summary.tracking_errors),
                     "control_hz": 50,
+                    "evaluation_horizon_steps": horizon_steps,
+                    "start_frame_sampling": "seeded_uniform_without_replacement",
                     "checkpoint_path": str(checkpoint),
                     "checkpoint_sha256": checkpoint_sha256,
                     "motion_file": str(motion_file),

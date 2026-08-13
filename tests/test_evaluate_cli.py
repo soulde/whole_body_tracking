@@ -85,6 +85,20 @@ def test_evaluate_parser_uses_clean_evaluation_defaults():
     assert args.task == "Tracking-Flat-G1-v0"
 
 
+def test_segment_start_frames_are_seeded_and_leave_a_full_horizon():
+    module = _import_evaluate_without_runtime()
+
+    first = module._segment_start_frames(100, motion_frames=13065, horizon_steps=500, seed=42)
+    repeated = module._segment_start_frames(100, motion_frames=13065, horizon_steps=500, seed=42)
+    different = module._segment_start_frames(100, motion_frames=13065, horizon_steps=500, seed=43)
+
+    assert first.tolist() == repeated.tolist()
+    assert first.tolist() != different.tolist()
+    assert len(set(first.tolist())) == 100
+    assert int(first.min()) >= 0
+    assert int(first.max()) <= 13065 - 500
+
+
 def test_disable_manager_terms_preserves_dataclass_and_configclass_like_containers():
     module = _import_evaluate_without_runtime()
 
@@ -142,6 +156,24 @@ class _FakeCommand:
 
     def reset_to_start(self, env_ids):
         self.start_ids.append(env_ids.tolist())
+
+    def reset_to_frame(self, env_ids, frame_ids):
+        self.start_ids.append((env_ids.tolist(), frame_ids.tolist()))
+
+    def update_reference_alignment(self):
+        return None
+
+
+def test_initial_segment_reset_uses_exact_start_frames():
+    module = _import_evaluate_without_runtime()
+    env = _FakeBaseEnv()
+    env.num_envs = 2
+    command = _FakeCommand()
+
+    module._reset_all_to_frames(env, command, np.array([10, 20]))
+
+    assert command.start_ids == [([0, 1], [10, 20])]
+    assert env.events == ["write", "forward", "history_reset", "compute"]
 
 
 def test_terminal_reset_restarts_failed_and_completed_environments_at_frame_zero():
@@ -362,18 +394,21 @@ def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
     class Command:
         def __init__(self):
             self.time_steps = torch.tensor([0])
-            self.motion = SimpleNamespace(time_step_total=1)
+            self.motion = SimpleNamespace(time_step_total=2)
             self.metrics = {"error_body_pos": torch.tensor([0.25])}
 
-        def reset_to_start(self, _env_ids):
-            events.append("reset_to_start")
+        def reset_to_frame(self, _env_ids, _frame_ids):
+            events.append("reset_to_frame")
+
+        def update_reference_alignment(self):
+            events.append("align")
 
         def _update_metrics(self):
             return None
 
     class TerminationManager:
         terminated = torch.tensor([False])
-        time_outs = torch.tensor([False])
+        time_outs = torch.tensor([True])
 
         def compute(self):
             return self.terminated
@@ -383,6 +418,7 @@ def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
     class Env:
         device = "cpu"
         num_envs = 1
+        max_episode_length = 1
 
         def __init__(self):
             self.command_manager = SimpleNamespace(get_term=lambda _name: command)
@@ -413,6 +449,8 @@ def test_evaluator_step_keeps_terminal_reset_state_mutable(tmp_path):
                 ("step_context", torch.is_inference_mode_enabled(), torch.is_grad_enabled())
             )
             env.mutable_state = torch.zeros(1)
+            env.mutable_state.add_(1)
+            events.append(("reset_value", env.mutable_state.item()))
             env.termination_manager.compute()
             return {"policy": torch.zeros((1, 1))}, None, None, None
 

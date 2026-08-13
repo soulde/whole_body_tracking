@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import math
-import numpy as np
 import os
-import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
+import numpy as np
+import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
@@ -278,22 +278,31 @@ class MotionCommand(CommandTerm):
 
     def reset_to_start(self, env_ids: Sequence[int]) -> None:
         """Reset selected environments to the exact first motion frame for evaluation."""
+        frame_ids = torch.zeros(len(env_ids), dtype=torch.long, device=self.device)
+        self.reset_to_frame(env_ids, frame_ids)
+
+    def reset_to_frame(self, env_ids: Sequence[int], frame_ids: torch.Tensor) -> None:
+        """Reset selected environments to exact motion frames for evaluation."""
         if len(env_ids) == 0:
             return
-        self.time_steps[env_ids] = 0
+        if frame_ids.shape != (len(env_ids),):
+            raise ValueError("frame_ids must contain one frame per environment")
+        if torch.any(frame_ids < 0) or torch.any(frame_ids >= self.motion.time_step_total):
+            raise ValueError("frame_ids are outside the motion")
+        self.time_steps[env_ids] = frame_ids
 
-        root_pos = self.motion.body_pos_w[0, 0].repeat(len(env_ids), 1) + self._env.scene.env_origins[env_ids]
+        root_pos = self.motion.body_pos_w[frame_ids, 0] + self._env.scene.env_origins[env_ids]
         root_state = torch.cat(
             [
                 root_pos,
-                self.motion.body_quat_w[0, 0].repeat(len(env_ids), 1),
-                self.motion.body_lin_vel_w[0, 0].repeat(len(env_ids), 1),
-                self.motion.body_ang_vel_w[0, 0].repeat(len(env_ids), 1),
+                self.motion.body_quat_w[frame_ids, 0],
+                self.motion.body_lin_vel_w[frame_ids, 0],
+                self.motion.body_ang_vel_w[frame_ids, 0],
             ],
             dim=-1,
         )
-        joint_pos = self.motion.joint_pos[0].repeat(len(env_ids), 1)
-        joint_vel = self.motion.joint_vel[0].repeat(len(env_ids), 1)
+        joint_pos = self.motion.joint_pos[frame_ids]
+        joint_vel = self.motion.joint_vel[frame_ids]
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
         self.robot.write_root_state_to_sim(root_state, env_ids=env_ids)
         self.bin_failed_count.zero_()
@@ -303,6 +312,11 @@ class MotionCommand(CommandTerm):
         self.time_steps += 1
         env_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
         self._resample_command(env_ids)
+
+        self.update_reference_alignment()
+
+    def update_reference_alignment(self) -> None:
+        """Refresh the motion reference aligned to the current simulated robot root."""
 
         anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
         anchor_quat_w_repeat = self.anchor_quat_w[:, None, :].repeat(1, len(self.cfg.body_names), 1)
