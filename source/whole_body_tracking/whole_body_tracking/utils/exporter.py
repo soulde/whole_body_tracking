@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
+from types import SimpleNamespace
+
 import torch
 
 import onnx
@@ -30,6 +32,12 @@ def export_motion_policy_as_onnx(
 
 class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
     def __init__(self, env: ManagerBasedRLEnv, actor_critic, normalizer=None, verbose=False):
+        if hasattr(actor_critic, "mlp") and not hasattr(actor_critic, "actor"):
+            normalizer = normalizer or actor_critic.obs_normalizer
+            actor_critic = SimpleNamespace(
+                actor=actor_critic.mlp,
+                is_recurrent=getattr(actor_critic, "is_recurrent", False),
+            )
         super().__init__(actor_critic, normalizer, verbose)
         cmd: MotionCommand = env.command_manager.get_term("motion")
 
